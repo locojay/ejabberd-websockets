@@ -40,6 +40,16 @@
 -define(NS_CLIENT, "jabber:client").
 -define(NS_STREAM, "http://etherx.jabber.org/streams").
 -define(TEST, 1).
+
+
+% macros
+-define(OP_CONT, 0).
+-define(OP_TEXT, 1).
+-define(OP_BIN, 2).
+-define(OP_CLOSE, 8).
+-define(OP_PING, 9).
+-define(OP_PONG, 10).
+
 %%  Erlang Records for state
 -record(wsr, {socket, sockmod, key, out}).
 
@@ -63,6 +73,7 @@
 	       }).
 
 start(Host, Sid, Key, IP) ->
+	?DEBUG("Starting ejabberd_mod_websocket", []),
     Proc = gen_mod:get_module_proc(Host, ejabberd_mod_websocket),
     case catch supervisor:start_child(Proc, [Sid, Key, IP]) of
     	{ok, Pid} -> {ok, Pid};
@@ -71,6 +82,7 @@ start(Host, Sid, Key, IP) ->
             {error, "Cannot start XMPP, Websocket session"}
     end.
 start_link(Sid, Key, IP) ->
+	?DEBUG("Starting ejabberd_mod_websocket", []),
     gen_fsm:start_link(?MODULE, [Sid, Key, IP], []).
 
 send({xmpp_websocket, FsmRef, _IP}, Packet) ->
@@ -410,8 +422,26 @@ send_receiver_reply(Receiver, Reply) ->
 %% send data to socket
 send_text(StateData, Text) ->
     ?DEBUG("Send XML on stream = ~p", [Text]),
-    (StateData#state.websocket_sockmod):send(StateData#state.websocket_s,
-                                             [0, Text, 255]).
+    ?DEBUG("sen")
+    (StateData#state.websocket_sockmod):send(StateData#state.websocket_s, [0, send_format(Text), 255]).
+% ----------------------------------------------------------------------------------------------------------
+% Function: -> binary() | iolist()
+% Description: Callback to format data before it is sent into the socket.
+% ----------------------------------------------------------------------------------------------------------
+-spec send_format(Data::iolist(), State::term()) -> binary().
+send_format(Data) ->
+	send_format(Data, ?OP_TEXT).
+send_format(Data, OpCode) ->
+	BData = erlang:iolist_to_binary(Data),
+	Len = erlang:size(BData),
+	if
+		Len < 126 ->
+			<<1:1, 0:3, OpCode:4, 0:1, Len:7, BData/binary>>;
+		Len < 65536 ->
+			<<1:1, 0:3, OpCode:4, 0:1, 126:7, Len:16, BData/binary>>;
+		true ->
+			<<1:1, 0:3, OpCode:4, 0:1, 127:7, 0:1, Len:63, BData/binary>>
+	end.
 
 send_element(StateData, {xmlstreamstart, Name, Attrs}) ->
     XmlString = streamstart_tobinary({xmlstreamstart, Name, Attrs}),

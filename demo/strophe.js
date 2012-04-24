@@ -3530,7 +3530,7 @@ Strophe.Websocket.prototype = {
      *    () error - The websocket error.
      */
 	_onError: function(error) {
-		console.log("ERROR : " + error)
+		console.error(error);
 	},
 
 	/** PrivateFunction: _onOpen

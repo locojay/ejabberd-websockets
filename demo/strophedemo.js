@@ -12,6 +12,7 @@ var StropheDemo = function() {
       connection = new Strophe.Connection({proto : new Strophe.Websocket("ws://" + server + ":5288/ws-xmpp")});
 
       connection.rawInput = function(log) {
+        console.log("RECV:"+log);
         var xml = $($.parseXML(log));
 
         if(xml.find("body").length){

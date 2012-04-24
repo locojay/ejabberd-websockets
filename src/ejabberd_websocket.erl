@@ -48,6 +48,7 @@ start_link(SockData, Opts) ->
     {ok, proc_lib:spawn_link(ejabberd_websocket, init, [SockData, Opts])}.
 
 init({SockMod, Socket}, Opts) ->
+	?DEBUG("Starting ejabberd_websocket", []),
     TLSEnabled = lists:member(tls, Opts),
     TLSOpts1 = lists:filter(fun({certfile, _}) -> true;
 			      (_) -> false
@@ -196,6 +197,7 @@ process_header(State, Data) ->
                             case sub_protocol(State#state.request_headers) of
                                 "xmpp" ->
                                     %% send the state back
+                                    ?DEBUG("XMPP sub_protocol", []),
                                     #state{sockmod = SockMod,
                                            socket = Socket,
                                            request_handlers = State#state.request_handlers};
@@ -237,6 +239,7 @@ process_header(State, Data) ->
                                        Error ->
                                            {Error, undefined, undefined}
                                    end,
+            ?DEBUG("Partial: ~p", [lists:flatten(Partial)]),
             ?DEBUG("C2SPid:~p~n",[Pid]),
             case Pid of
                 false ->
@@ -261,60 +264,80 @@ add_header(Name, Value, State) ->
     [{Name, Value} | State#state.request_headers].
 
 is_websocket_upgrade(RequestHeaders) ->
-    Connection = {'Connection', "Upgrade"} == lists:keyfind('Connection', 1,
+    {'Connection', ConnectionValue} = lists:keyfind('Connection', 1,
                                                             RequestHeaders),
-    Upgrade = {'Upgrade', "WebSocket"} == lists:keyfind('Upgrade', 1,
-                                                        RequestHeaders),
+    Connection = string:str(ConnectionValue, "Upgrade") =/= 0,
+
+    UpgradeHeader = lists:keyfind('Upgrade', 1,
+                                  RequestHeaders),
+    Upgrade = case UpgradeHeader of
+                  {'Upgrade', UpgradeName} ->
+                    "websocket" == string:to_lower(UpgradeName);
+                  _ -> false
+              end,
     Connection and Upgrade.
 
-handshake(State) ->
-    SockMod = State#state.sockmod,
-    Socket = State#state.socket,
-    Data = SockMod:recv(Socket, 0, 300000),
-    case Data of
-        {ok, BinData} ->
-            ?DEBUG("Handshake data received.", [State#state.request_headers]),
-            {_, Host} = lists:keyfind('Host', 1, State#state.request_headers),
-            {_, Origin} = lists:keyfind("Origin",
-                                        1, State#state.request_headers),
-            SubProto = sub_protocol(State#state.request_headers),
-            {_, Key1} = lists:keyfind("Sec-Websocket-Key1",
-                                      1,
-                                      State#state.request_headers),
-            {_, Key2} = lists:keyfind("Sec-Websocket-Key2",
-                                      1,
-                                      State#state.request_headers),
-            case websocket_verify_keys(Key1, Key2) of
-                {Part1, Part2} ->
-                    Sig = websocket_sign(Part1, Part2, BinData),
-                    %% Build response
-                    Res = build_handshake_response(State#state.socket,
-                                                   Host,
-                                                   Origin,
-                                                   State#state.request_path,
-                                                   SubProto,
-                                                   Sig),
-                    ?DEBUG("Sending handshake response:~p~n",[Res]),
-                    %% send response
-                    case send_text(State, Res) of
-                        ok -> true;
-                        E ->
-                            ?DEBUG("ERROR Sending text:~p~n",[E]),
-                            false
-                    end;
-                false ->
-                    ?ERROR_MSG("Error during handshake verification:~p~n",
-                               [State]),
-                    false
-            end;
-        {error, Res} ->
-            %% report error and close connection by returning false
-            ?ERROR_MSG("Error during handshake:~p~n",[Res]),
-            false;
-        D ->
-            ?DEBUG("Unexpected Data in handshake:~p~n", [D]),
-            false
-    end.
+    handshake(State) ->
+        {_, Key} = lists:keyfind("Sec-Websocket-Key", 1, State#state.request_headers),
+        Accept = base64:encode_to_string(crypto:sha([Key, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"])),
+        Res = ["HTTP/1.1 101 Switching Protocols\r\n",
+            "Upgrade: websocket\r\n",
+            "Connection: Upgrade\r\n",
+            "Sec-WebSocket-Protocol: xmpp\r\n",
+            "Sec-WebSocket-Accept: ", Accept, "\r\n\r\n"
+        ],
+        %% send response
+        case send_text(State, Res) of
+            ok -> true;
+            E ->
+                ?DEBUG("ERROR Sending text:~p~n",[E]),
+                false
+        end.
+%%    Data = SockMod:recv(Socket, 0, 300000),
+%%   case Data of
+%        {ok, BinData} ->
+%            ?DEBUG("Handshake data received.", [State#state.request_headers]),
+%            {_, Host} = lists:keyfind('Host', 1, State#state.request_headers),
+%            {_, Origin} = lists:keyfind("Origin",
+%                                        1, State#state.request_headers),
+%            SubProto = sub_protocol(State#state.request_headers),
+%            {_, Key1} = lists:keyfind("Sec-Websocket-Key1",
+%                                      1,
+%                                      State#state.request_headers),
+%            {_, Key2} = lists:keyfind("Sec-Websocket-Key2",
+%                                      1,
+%                                      State#state.request_headers),
+%            case websocket_verify_keys(Key1, Key2) of
+%                {Part1, Part2} ->
+%                    Sig = websocket_sign(Part1, Part2, BinData),
+%                    %% Build response
+%                    Res = build_handshake_response(State#state.socket,
+%                                                   Host,
+%                                                   Origin,
+%                                                   State#state.request_path,
+%                                                   SubProto,
+%                                                   Sig),
+%                    ?DEBUG("Sending handshake response:~p~n",[Res]),
+%                    %% send response
+%                    case send_text(State, Res) of
+%                        ok -> true;
+%                        E ->
+%                            ?DEBUG("ERROR Sending text:~p~n",[E]),
+%                            false
+%                    end;
+%                false ->
+%                    ?ERROR_MSG("Error during handshake verification:~p~n",
+%                               [State]),
+%                    false
+%            end;
+%        {error, Res} ->
+%            %% report error and close connection by returning false
+%            ?ERROR_MSG("Error during handshake:~p~n",[Res]),
+%            false;
+%        D ->
+%            ?DEBUG("Unexpected Data in handshake:~p~n", [D]),
+%            false
+%    end.
 process_data(State, Data) ->
     SockMod = State#state.sockmod,
     Socket = State#state.socket,
@@ -379,6 +402,7 @@ process_request(State) ->
 process([], _) ->
     false;
 process(RequestHandlers, Request) ->
+    ?DEBUG("Process RequestHandlers: ~p; Request: ~p", [RequestHandlers, Request]),
     [{HandlerPathPrefix, HandlerModule} | HandlersLeft] = RequestHandlers,
     case (lists:prefix(HandlerPathPrefix, Request#wsrequest.path) or
           (HandlerPathPrefix==Request#wsrequest.path)) of
@@ -391,6 +415,7 @@ process(RequestHandlers, Request) ->
             %% ["foo", "bar"]
             LocalPath = lists:nthtail(length(HandlerPathPrefix),
                                       Request#wsrequest.path),
+            ?DEBUG("HandlerModule: ~p, LocalPath: ~p", [HandlerModule, LocalPath]),
             HandlerModule:process(LocalPath, Request);
 	false ->
 	    process(HandlersLeft, Request)
@@ -402,7 +427,7 @@ send_text(State, Text) ->
 	{error, timeout} ->
 	    ?INFO_MSG("Timeout on ~p:send",[State#state.sockmod]),
 	    exit(normal);
-        Error ->
+    Error ->
 	    ?DEBUG("Error in ~p:send: ~p",[State#state.sockmod, Error]),
 	    exit(normal)
     end.
@@ -410,6 +435,7 @@ send_text(State, Text) ->
 websocket_sign(Part1, Part2, Key3) ->
     crypto:md5( <<Part1:32/unsigned-integer, Part2:32/unsigned-integer,
                  Key3/binary>> ).
+
 %% verify websocket keys
 websocket_verify_keys(Key1, Key2) ->
     P1 = parse_seckey(Key1),
