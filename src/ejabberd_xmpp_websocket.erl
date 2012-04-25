@@ -61,8 +61,8 @@
 		waiting_input = false,
 		shaper_state,
 		shaper_timer,
-                websocket_sockmod,
-                websocket_s,
+		websocket_sockmod,
+		websocket_s,
 		websocket_receiver,
 		wait_timer,
 		timer,
@@ -70,10 +70,11 @@
 		max_inactivity,
 		max_pause,
 		ip = ?NULL_PEER
-	       }).
+}).
 
 start(Host, Sid, Key, IP) ->
-	?DEBUG("Starting ejabberd_mod_websocket", []),
+	?DEBUG("Starting ejabberd_xmpp_websocket", []),
+	?DEBUG("Host: ~p; Sid: ~p; Key: ~p, IP: ~p", [Host, Sid, Key, IP]),
     Proc = gen_mod:get_module_proc(Host, ejabberd_mod_websocket),
     case catch supervisor:start_child(Proc, [Sid, Key, IP]) of
     	{ok, Pid} -> {ok, Pid};
@@ -86,17 +87,20 @@ start_link(Sid, Key, IP) ->
     gen_fsm:start_link(?MODULE, [Sid, Key, IP], []).
 
 send({xmpp_websocket, FsmRef, _IP}, Packet) ->
+    ?DEBUG("xmpp_websocket send", []),
     gen_fsm:sync_send_all_state_event(FsmRef, {send, Packet}).
 
 send_xml({xmpp_websocket, FsmRef, _IP}, Packet) ->
+    ?DEBUG("xmpp_websocket send_xml", []),
     gen_fsm:sync_send_all_state_event(FsmRef, {send_xml, Packet}).
 
 setopts({xmpp_websocket, FsmRef, _IP}, Opts) ->
+    ?DEBUG("xmpp_websocket setopts", []),
     case lists:member({active, once}, Opts) of
-	true ->
-	    gen_fsm:send_all_state_event(FsmRef, {activate, self()});
-	_ ->
-	    ok
+	    true ->
+	        gen_fsm:send_all_state_event(FsmRef, {activate, self()});
+	    _ ->
+	        ok
     end.
 
 controlling_process(_Socket, _Pid) ->
@@ -118,6 +122,7 @@ monitor({xmpp_websocket, FsmRef, _IP}) ->
     erlang:monitor(process, FsmRef).
 
 close({xmpp_websocket, FsmRef, _IP}) ->
+    ?DEBUG("close, xmpp:websocket", []),
     catch gen_fsm:sync_send_all_state_event(FsmRef, {stop, close}).
 
 sockname(_Socket) ->
@@ -138,6 +143,7 @@ process_request(WSockMod, WSock, FsmRef, Data, IP) ->
     PayloadSize = iolist_size(Data),
     case validate_request(Data, PayloadSize, MaxStanzaSize) of
         {ok, ParsedPayload} ->
+            ?DEBUG("Parsed Payload: ~p", [ParsedPayload]),
             case stream_start(ParsedPayload) of
                 {Host, Sid, Key} when (FsmRef =:= false) or
                                       (FsmRef =:= undefined) ->
@@ -162,6 +168,7 @@ process_request(WSockMod, WSock, FsmRef, Data, IP) ->
                                            out=[ParsedPayload]}),
                     {Data, <<>>, FsmRef};
                 false ->
+                    ?DEBUG("stream start: false", []),
                     send_data(FsmRef, #wsr{sockmod=WSockMod,
                                            socket=WSock,
                                            out=[ParsedPayload]}),
@@ -224,6 +231,7 @@ handle_event({become_controller, C2SPid}, StateName, StateData) ->
                       %% skip
                       ?DEBUG("Empty input queue.",[]);
                  (Event) ->
+                     ?DEBUG("send event: ~p", [Event]),
                       C2SPid ! Event
 	      end, queue:to_list(Input)),
 	    {next_state, StateName, StateData#state{
@@ -301,9 +309,11 @@ handle_sync_event(#wsr{out=Payload, socket=WSocket, sockmod=WSockmod},
                              websocket_receiver=From}}
     end;
 handle_sync_event({stop,close}, _From, _StateName, StateData) ->
+    ?DEBUG("stop sync event, close", []),
     Reply = ok,
     {stop, normal, Reply, StateData};
 handle_sync_event({stop,stream_closed}, _From, _StateName, StateData) ->
+    ?DEBUG("stop sync event, stream_closed", []),
     Reply = ok,
     {stop, normal, Reply, StateData};
 handle_sync_event({stop, Reason}, _From, _StateName, StateData) ->
@@ -397,17 +407,21 @@ validate_request(Data, PayloadSize, MaxStanzaSize) ->
     ?DEBUG("--- incoming data --- ~n~s~n --- END --- ", [Data]),
     case xml_stream:parse_element(Data) of
         {error, Reason} ->
+            ?DEBUG("error parsing element: ~p", [Reason]),
             %% detect stream start and stream end
             case stream_start_end(Data) of
                 {xmlstreamstart, Name, Attrs} ->
+                    ?DEBUG("xmlstreamstart", []),
                     {ok, {xmlstreamstart, Name, Attrs}};
                 {xmlstreamend, End} ->
+                    ?DEBUG("xmlstreamend", []),
                     {ok, {xmlstreamend, End}};
                 _ ->
                     ?ERROR_MSG("Bad xml data: ~p~n", [Reason]),
                     {error, bad_request}
             end;
         ParsedData ->
+            ?DEBUG("parsed: ~p", [ParsedData]),
             if PayloadSize =< MaxStanzaSize ->
                     {ok, ParsedData};
                true ->
@@ -422,8 +436,10 @@ send_receiver_reply(Receiver, Reply) ->
 %% send data to socket
 send_text(StateData, Text) ->
     ?DEBUG("Send XML on stream = ~p", [Text]),
-    ?DEBUG("sen")
-    (StateData#state.websocket_sockmod):send(StateData#state.websocket_s, [0, send_format(Text), 255]).
+    ?DEBUG("send format: ~p", [send_format(Text)]),
+    ?DEBUG("statedata: ~p", [StateData]),
+    ?DEBUG("WS_SOCKET: ~p", [StateData#state.websocket_s]),
+    ?DEBUG("Send data: ~p", [(StateData#state.websocket_sockmod):send(StateData#state.websocket_s, send_format(Text))]).
 % ----------------------------------------------------------------------------------------------------------
 % Function: -> binary() | iolist()
 % Description: Callback to format data before it is sent into the socket.

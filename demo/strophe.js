@@ -3480,11 +3480,11 @@ Strophe.Websocket.prototype = {
 	connect: function(connection) {
 		if(!this.socket) {
 			this.connection	= connection;
-      this.socket	= new WebSocket(this.service, "xmpp");
-		  this.socket.onopen  = this._onOpen.bind(this);
+			this.socket	= new WebSocket(this.service, "xmpp");
+			this.socket.onopen  = this._onOpen.bind(this);
 			this.socket.onerror = this._onError.bind(this);
-		  this.socket.onclose	= this._onClose.bind(this);
-		  this.socket.onmessage	= this._onMessage.bind(this);
+            this.socket.onclose	= this._onClose.bind(this);
+            this.socket.onmessage	= this._onMessage.bind(this);
 		}
 	},
 
@@ -3493,7 +3493,7 @@ Strophe.Websocket.prototype = {
 	 */
 	disconnect: function() {
 		this.connection.xmlOutput(this._endStream());
-    this.connection.rawOutput(this._endStream());
+        this.connection.rawOutput(this._endStream());
 		this.socket.send(this._endStream())
 		this.socket.close(); // Close the socket
 	},
@@ -3511,6 +3511,7 @@ Strophe.Websocket.prototype = {
 	send: function(msg) {
 		this.connection.xmlOutput(msg);
         this.connection.rawOutput(Strophe.serialize(msg));
+        console.log(this.socket);
 		this.socket.send(Strophe.serialize(msg));
 	},
 
@@ -3530,7 +3531,7 @@ Strophe.Websocket.prototype = {
      *    () error - The websocket error.
      */
 	_onError: function(error) {
-		console.error(error);
+		console.log(error);
 	},
 
 	/** PrivateFunction: _onOpen
@@ -3538,8 +3539,9 @@ Strophe.Websocket.prototype = {
      *
      */
 	_onOpen: function() {
+	    console.log("_onOpen", this.socket);
 		this.connection.xmlOutput(this._startStream());
-    this.connection.rawOutput(this._startStream());
+		this.connection.rawOutput(this._startStream());
 		this.socket.send(this._startStream());
 	},
 
@@ -3548,6 +3550,7 @@ Strophe.Websocket.prototype = {
      *
 	 */
 	_onClose: function(event) {
+	    console.log('_onClose', event);
 		this.connection._doDisconnect()
 	},
 

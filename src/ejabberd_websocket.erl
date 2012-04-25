@@ -92,37 +92,38 @@ receive_headers(State) ->
     ?DEBUG("Data in ~p: headers : ~p",[State, Data]),
     case State#state.sockmod of
         gen_tcp ->
+            ?DEBUG("GEN_TCP", []),
             NewState = process_header(State, Data),
             case NewState#state.end_of_request of
                 true ->
+                    ?DEBUG("END OF REQUEST", []),
                     ok;
                 _ ->
+                    ?DEBUG("NOT END OF REQUEST", []),
                     receive_headers(NewState)
             end;
         _ ->
+            ?DEBUG("NOT GEN_TCP", []),
             case Data of
                 {ok, Binary} ->
                     ?DEBUG("not gen_tcp, ssl? ~p~n", [Binary]),
-                    {Request, Trail} = parse_request(
-                                         State,
-					 State#state.trail ++
-                                         binary_to_list(Binary)),
-		    State1 = State#state{trail = Trail},
-		    NewState = lists:foldl(
-				 fun(D, S) ->
-                                         case S#state.end_of_request of
-                                             true ->
-                                                 S;
-                                             _ ->
-                                                 process_header(S, D)
-                                         end
-				 end, State1, Request),
-		    case NewState#state.end_of_request of
-			true ->
-			    ok;
-			_ ->
-			    receive_headers(NewState)
-		    end;
+                    {Request, Trail} = parse_request(State, 
+                            State#state.trail ++ binary_to_list(Binary)),
+                    State1 = State#state{trail = Trail},
+		            NewState = lists:foldl(fun(D, S) ->
+		                case S#state.end_of_request of
+		                    true ->
+		                        S;
+		                    _ ->
+		                        process_header(S, D)
+		                    end
+		            end, State1, Request),
+		            case NewState#state.end_of_request of
+                        true ->
+                            ok;
+                        _ ->
+                            receive_headers(NewState)
+		            end;
                 Req ->
                     ?DEBUG("not gen_tcp or ok: ~p~n", [Req]),
                     ok
@@ -131,53 +132,57 @@ receive_headers(State) ->
 
 process_header(State, Data) ->
     case Data of
-	{ok, {http_request, Method, Uri, Version}} ->
+	    {ok, {http_request, Method, Uri, Version}} ->
             KeepAlive = case Version of
-		{1, 1} ->
-		    true;
-		_ ->
-		    false
-	    end,
-	    Path = case Uri of
-	        {absoluteURI, _Scheme, _Host, _Port, P} -> {abs_path, P};
-	        _ -> Uri
-	    end,
-	    State#state{request_method = Method,
-			request_version = Version,
-			request_path = Path,
-			request_keepalive = KeepAlive};
+		        {1, 1} ->
+		            true;
+		        _ ->
+		            false
+	        end,
+	        Path = case Uri of
+	            {absoluteURI, _Scheme, _Host, _Port, P} -> {abs_path, P};
+	            _ -> Uri
+	        end,
+	        State#state{request_method = Method,
+			    request_version = Version,
+			    request_path = Path,
+			    request_keepalive = KeepAlive
+			};
         {ok, {http_header, _, 'Connection'=Name, _, Conn}} ->
-	    KeepAlive1 = case jlib:tolower(Conn) of
-			     "keep-alive" ->
-				 true;
-			     "close" ->
-				 false;
-			     _ ->
-				 State#state.request_keepalive
-			 end,
-	    State#state{request_keepalive = KeepAlive1,
-			request_headers=add_header(Name, Conn, State)};
-	{ok, {http_header, _, 'Content-Length'=Name, _, SLen}} ->
-	    case catch list_to_integer(SLen) of
-		Len when is_integer(Len) ->
-		    State#state{request_content_length = Len,
-				request_headers=add_header(Name, SLen, State)};
-		_ ->
-		    State
-	    end;
-	{ok, {http_header, _, 'Host'=Name, _, Host}} ->
-	    State#state{request_host = Host,
-			request_headers=add_header(Name, Host, State)};
-	{ok, {http_header, _, Name, _, Value}} ->
-	    State#state{request_headers=add_header(Name, Value, State)};
-	{ok, http_eoh} when State#state.request_host == undefined ->
-	    ?WARNING_MSG("An HTTP request without 'Host' HTTP header was received.", []),
-	    throw(http_request_no_host_header);
+            KeepAlived = string:str(jlib:tolower(Conn), "keep-alive") > 0,
+            Close = jlib:tolower(Conn) == "close",
+	        KeepAlive1 = case Close of
+	            true ->
+	                true;
+	            false ->
+	                KeepAlived
+	        end,
+	        ?DEBUG("Keepalive? ~p", [KeepAlive1]),
+            State#state{request_keepalive = KeepAlive1,
+                request_headers=add_header(Name, Conn, State)
+            };
+	    {ok, {http_header, _, 'Content-Length'=Name, _, SLen}} ->
+	        case catch list_to_integer(SLen) of
+		        Len when is_integer(Len) ->
+		            State#state{request_content_length = Len,
+				        request_headers=add_header(Name, SLen, State)};
+		        _ ->
+		            State
+	        end;
+	    {ok, {http_header, _, 'Host'=Name, _, Host}} ->
+	        State#state{request_host = Host,
+			    request_headers=add_header(Name, Host, State)
+			};
+	    {ok, {http_header, _, Name, _, Value}} ->
+	        State#state{request_headers=add_header(Name, Value, State)};
+	    {ok, http_eoh} when State#state.request_host == undefined ->
+	        ?WARNING_MSG("An HTTP request without 'Host' HTTP header was received.", []),
+	        throw(http_request_no_host_header);
         {ok, http_eoh} ->
-	    ?DEBUG("(~w) http query: ~w ~s~n",
-		   [State#state.socket,
-		    State#state.request_method,
-		    element(2, State#state.request_path)]),
+	        ?DEBUG("(~w) http query: ~w ~s~n",
+		    [State#state.socket,
+		        State#state.request_method,
+		        element(2, State#state.request_path)]),
             Out = process_request(State),
             %% Test for web socket
             case (Out =/= false) and is_websocket_upgrade(State#state.request_headers) of
@@ -277,22 +282,25 @@ is_websocket_upgrade(RequestHeaders) ->
               end,
     Connection and Upgrade.
 
-    handshake(State) ->
-        {_, Key} = lists:keyfind("Sec-Websocket-Key", 1, State#state.request_headers),
-        Accept = base64:encode_to_string(crypto:sha([Key, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"])),
-        Res = ["HTTP/1.1 101 Switching Protocols\r\n",
-            "Upgrade: websocket\r\n",
-            "Connection: Upgrade\r\n",
-            "Sec-WebSocket-Protocol: xmpp\r\n",
-            "Sec-WebSocket-Accept: ", Accept, "\r\n\r\n"
-        ],
-        %% send response
-        case send_text(State, Res) of
-            ok -> true;
-            E ->
-                ?DEBUG("ERROR Sending text:~p~n",[E]),
-                false
-        end.
+handshake(State) ->
+    {_, Key} = lists:keyfind("Sec-Websocket-Key", 1, State#state.request_headers),
+    ?DEBUG("Handshake key: ~p", [Key]),
+    Accept = base64:encode_to_string(crypto:sha([Key, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"])),
+    Res = ["HTTP/1.1 101 Switching Protocols\r\n",
+        "Upgrade: websocket\r\n",
+        "Connection: Upgrade\r\n",
+        "Sec-WebSocket-Protocol: xmpp\r\n",
+        "Sec-WebSocket-Accept: ", Accept, "\r\n\r\n"
+    ],
+    ?DEBUG("Response: ~p", [Res]),
+    ?DEBUG("State: ~p", [State]),
+    %% send response
+    case send_text(State, Res) of
+        ok -> true;
+        E ->
+            ?DEBUG("ERROR Sending text:~p~n",[E]),
+            false
+    end.
 %%    Data = SockMod:recv(Socket, 0, 300000),
 %%   case Data of
 %        {ok, BinData} ->
@@ -422,8 +430,11 @@ process(RequestHandlers, Request) ->
     end.
 %% send data
 send_text(State, Text) ->
+    ?DEBUG("SOCKET: ~p", [State#state.socket]),
     case catch (State#state.sockmod):send(State#state.socket, Text) of
-        ok -> ok;
+        ok -> 
+            ?INFO_MSG("sent ok", []),
+            ok;
 	{error, timeout} ->
 	    ?INFO_MSG("Timeout on ~p:send",[State#state.sockmod]),
 	    exit(normal);
