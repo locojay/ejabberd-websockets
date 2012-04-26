@@ -135,12 +135,12 @@ peername({xmpp_websocket, _FsmRef, IP}) ->
 process_request(WSockMod, WSock, FsmRef, Data, IP) ->
     Opts1 = ejabberd_c2s_config:get_c2s_limits(),
     Opts = [{xml_socket, true} | Opts1],
-    MaxStanzaSize =
-	case lists:keysearch(max_stanza_size, 1, Opts) of
+    MaxStanzaSize = case lists:keysearch(max_stanza_size, 1, Opts) of
 	    {value, {_, Size}} -> Size;
 	    _ -> infinity
 	end,
     PayloadSize = iolist_size(Data),
+    ?DEBUG("MaxStanzaSize: ~p~n PayloadSize: ~p", [MaxStanzaSize, PayloadSize]),
     case validate_request(Data, PayloadSize, MaxStanzaSize) of
         {ok, ParsedPayload} ->
             ?DEBUG("Parsed Payload: ~p", [ParsedPayload]),
@@ -222,27 +222,30 @@ handle_event({become_controller, C2SPid}, StateName, StateData) ->
     ?DEBUG("C2SPid:~p~nStateName:~p~nData:~p~n",
            [C2SPid, StateName, StateData#state.input]),
     case StateData#state.input of
-	cancel ->
-	    {next_state, StateName, StateData#state{
-				      waiting_input = C2SPid}};
-	Input ->
-	    lists:foreach(
-	      fun([]) ->
+	    cancel ->
+	        ?DEBUG("CANCEL", []),
+	        {next_state, StateName, StateData#state{
+	            waiting_input = C2SPid}};
+	    Input ->
+	        lists:foreach(
+	            fun([]) ->
                       %% skip
                       ?DEBUG("Empty input queue.",[]);
                  (Event) ->
                      ?DEBUG("send event: ~p", [Event]),
                       C2SPid ! Event
-	      end, queue:to_list(Input)),
+                end, queue:to_list(Input)),
 	    {next_state, StateName, StateData#state{
 				      input = queue:new(),
 				      waiting_input = C2SPid}}
     end;
 
 handle_event({change_shaper, Shaper}, StateName, StateData) ->
+    ?DEBUG("change shaper", []),
     NewShaperState = shaper:new(Shaper),
     {next_state, StateName, StateData#state{shaper_state = NewShaperState}};
 handle_event(_Event, StateName, StateData) ->
+    ?DEBUG("handle event next state", []),
     {next_state, StateName, StateData}.
 
 %%----------------------------------------------------------------------
@@ -256,6 +259,7 @@ handle_event(_Event, StateName, StateData) ->
 %%----------------------------------------------------------------------
 handle_sync_event({send_xml, Packet}, _From, StateName,
 		  #state{websocket_s = undefined} = StateData) ->
+	?DEBUG("send xml", []),
     Output = [Packet | StateData#state.output],
     Reply = ok,
     {reply, Reply, StateName, StateData#state{output = Output}};
@@ -266,9 +270,11 @@ handle_sync_event({send_xml, Packet}, _From, StateName, StateData) ->
     Timer = set_inactivity_timer(StateData#state.pause,
 				 StateData#state.max_inactivity),
     lists:foreach(fun ({xmlstreamstart, Name, Attrs}) ->
+                        ?DEBUG("streamstart", []),
                           send_element(StateData,
                                        {xmlstreamstart, Name, Attrs});
                       ({xmlstreamend, End}) ->
+                          ?DEBUG("xmlstreamend", []),
                           send_element(StateData,
                                        {xmlstreamend, End});
                       ({_Name, Element}) ->
@@ -293,11 +299,14 @@ handle_sync_event(#wsr{out=Payload, socket=WSocket, sockmod=WSockmod},
             ?DEBUG("really sending now: ~p", [Payload]),
             lists:foreach(
               fun({xmlstreamend, End}) ->
+                        ?DEBUG("streamend", []),
                       gen_fsm:send_event(
                         C2SPid, {xmlstreamend, End});
                  ({xmlelement, "stream:stream", Attrs, []}) ->
+                        ?DEBUG("stream start xmlelement", []),
                       send_stream_start(C2SPid, Attrs);
                  ({xmlstreamstart, "stream:stream", Attrs}) ->
+                     ?DEBUG("stream start stream:stream", []),
                       send_stream_start(C2SPid, Attrs);
                  (El) ->
                       gen_fsm:send_event(

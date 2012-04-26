@@ -244,7 +244,7 @@ process_header(State, Data) ->
                                        Error ->
                                            {Error, undefined, undefined}
                                    end,
-            ?DEBUG("Partial: ~p", [lists:flatten(Partial)]),
+            %%?DEBUG("Partial: ~p", [lists:flatten(Partial)]),
             ?DEBUG("C2SPid:~p~n",[Pid]),
             case Pid of
                 false ->

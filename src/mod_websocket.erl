@@ -76,6 +76,7 @@ process(Path, Req) ->
                        X when is_list(X) ->
                            list_to_binary(X);
                        socket_closed ->
+                           ?DEBUG("socket closed", []),
                            build_stream_end();
                        Y ->
                            Y
