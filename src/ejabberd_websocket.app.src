@@ -1,0 +1,13 @@
+%% -*- erlang -*-
+%% vim: set filetype=erlang:
+
+{application, ejabberd_websocket,
+ [
+  {description, ""},
+  {vsn, "1.0.0"},
+  {registered, []},
+  {applications, [
+                 ]},
+  {mod, { ejabberd_websocket, []}},
+  {env, []}
+ ]}.

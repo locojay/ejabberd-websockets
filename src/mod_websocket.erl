@@ -23,8 +23,11 @@
          process/2
         ]).
 
+-define(LAGER,1).
+
 -include("ejabberd.hrl").
 -include("jlib.hrl").
+-include("logger.hrl").
 -include("ejabberd_websocket.hrl").
 -record(wsdatastate, {legacy=true,
                       ft=undefined,
@@ -36,20 +39,20 @@
 
 % records
 -record(state, {
-	buffer	= <<>>,
-	mask_key  = <<0,0,0,0>>,
-	fragments = [] %% if we are in the midst of receving a fragmented message, fragments are contained here in reverse order
+    buffer    = <<>>,
+    mask_key  = <<0,0,0,0>>,
+    fragments = [] %% if we are in the midst of receving a fragmented message, fragments are contained here in reverse order
 }).
 
 -record(frame, {fin,
-				rsv1,
-				rsv2,
-				rsv3,
-				opcode,
-				maskbit,
-				length,
-				maskkey,
-				data}).
+                rsv1,
+                rsv2,
+                rsv3,
+                opcode,
+                maskbit,
+                length,
+                maskkey,
+                data}).
 
 % macros
 -define(OP_CONT, 0).
@@ -67,7 +70,7 @@
 %%% API
 %%%----------------------------------------------------------------------
 process(Path, Req) ->
-    ?DEBUG("Request data:~p:", [Path, Req]),
+    ?DEBUG("Request Ppath: ~p, Req :~p:", [Path, Req]),
     %% Validate Origin
     case validate_origin(Req#wsrequest.headers) of
         true ->
@@ -91,32 +94,32 @@ process(Path, Req) ->
                     {<<>>, <<>>};
                 _ ->
                     case take_frame(Data) of
-                		{error, max_size_reached} ->
-                			?DEBUG("reached max unparsed buffer size, aborting connection", []),
-                			{error, max_size_reached};
-                		{undefined, Rest} ->
-                			?DEBUG("no frame to take, add to buffer: ~p", [Rest]),
-                			%% no full frame to be had yet
-                			DState#wsdatastate{buffer = Rest};
-                		{Frame=#frame{}, Rest} ->
-                			?DEBUG("parsed frame ~p, remaining buffer is: ~p", [Frame,Rest]),
-                			%% sanity check, in case client is broken
-                			case sanity_check(Frame) of
-                				true ->
-                					?DEBUG("sanity checks successfully performed",[]),
-                					ejabberd_xmpp_websocket:process_request(
-                					    Req#wsrequest.wsockmod,
+                        {error, max_size_reached} ->
+                            ?DEBUG("reached max unparsed buffer size, aborting connection", []),
+                            {error, max_size_reached};
+                        {undefined, Rest} ->
+                            ?DEBUG("no frame to take, add to buffer: ~p", [Rest]),
+                            %% no full frame to be had yet
+                            DState#wsdatastate{buffer = Rest};
+                        {Frame=#frame{}, Rest} ->
+                            ?DEBUG("parsed frame ~p, remaining buffer is: ~p", [Frame,Rest]),
+                            %% sanity check, in case client is broken
+                            case sanity_check(Frame) of
+                                true ->
+                                    ?DEBUG("sanity checks successfully performed",[]),
+                                    ejabberd_xmpp_websocket:process_request(
+                                        Req#wsrequest.wsockmod,
                                         Req#wsrequest.wsocket,
                                         Req#wsrequest.fsmref,
                                         Frame#frame.data,
                                         Req#wsrequest.ip);
-                				false -> % protocol error
-                					?DEBUG("sanity checks errors encountered, closing websocket",[]),
-                					{error, sanity_check}
-                			end;
-                		_ ->
-                		    ?DEBUG("wtf?", [])
-                	end
+                                false -> % protocol error
+                                    ?DEBUG("sanity checks errors encountered, closing websocket",[]),
+                                    {error, sanity_check}
+                            end;
+                        _ ->
+                            ?DEBUG("wtf?", [])
+                    end
             end;
         _ ->
             ?DEBUG("Invalid Origin in Request: ~p~n",[Req]),
@@ -150,139 +153,139 @@ validate_origin([]) ->
     true;
 validate_origin(Headers) ->
     is_tuple(lists:keyfind("Origin", 1, Headers)).
-    
+
 % ---------------------------- \/ frame parsing ------------------------------------------------------------
 
 % format sanity checks
 -spec sanity_check(#frame{}) -> true | false.
 sanity_check(Frame) ->
-	Checks = [
-		{1, Frame#frame.maskbit},
-		{0, Frame#frame.rsv1},
-		{0, Frame#frame.rsv2},
-		{0, Frame#frame.rsv3}
-	],
-	lists:foldl(fun({A,B}, Acc) -> Acc andalso (A =:= B) end, true, Checks).
+    Checks = [
+        {1, Frame#frame.maskbit},
+        {0, Frame#frame.rsv1},
+        {0, Frame#frame.rsv2},
+        {0, Frame#frame.rsv3}
+    ],
+    lists:foldl(fun({A,B}, Acc) -> Acc andalso (A =:= B) end, true, Checks).
 
 % parse received data and get the frames
 -spec take_frame(Data::binary()) -> {#frame{} | undefined, Rest::binary()} | {error, max_size_reached}.
 % normal length
-take_frame(<<Fin:1, 
-			 Rsv1:1, %% Rsv1 = 0
-			 Rsv2:1, %% Rsv2 = 0
-			 Rsv3:1, %% Rsv3 = 0
-			 Opcode:4,
-			 MaskBit:1, %% must be 1
-			 PayloadLen:7,
-			 MaskKey:4/binary,
-			 PayloadData:PayloadLen/binary-unit:8,
-			 Rest/binary>>) when PayloadLen < 126 ->
-	%% Don't auto-unmask control frames
+take_frame(<<Fin:1,
+             Rsv1:1, %% Rsv1 = 0
+             Rsv2:1, %% Rsv2 = 0
+             Rsv3:1, %% Rsv3 = 0
+             Opcode:4,
+             MaskBit:1, %% must be 1
+             PayloadLen:7,
+             MaskKey:4/binary,
+             PayloadData:PayloadLen/binary-unit:8,
+             Rest/binary>>) when PayloadLen < 126 ->
+    %% Don't auto-unmask control frames
     ?DEBUG("tk1", []),
-	Data = case ?IS_CONTROL_OPCODE(Opcode) of
-		true  -> PayloadData;
-		false -> unmask(MaskKey,PayloadData)
-	end,
-	{#frame{fin=Fin, 
-			rsv1=Rsv1,
-			rsv2=Rsv2,
-			rsv3=Rsv3,
-			opcode=Opcode,
-			maskbit=MaskBit,
-			length=PayloadLen,
-			maskkey=MaskKey,
-			data = Data}, Rest};
+    Data = case ?IS_CONTROL_OPCODE(Opcode) of
+        true  -> PayloadData;
+        false -> unmask(MaskKey,PayloadData)
+    end,
+    {#frame{fin=Fin,
+            rsv1=Rsv1,
+            rsv2=Rsv2,
+            rsv3=Rsv3,
+            opcode=Opcode,
+            maskbit=MaskBit,
+            length=PayloadLen,
+            maskkey=MaskKey,
+            data = Data}, Rest};
 % extended payload (126)
-take_frame(<<Fin:1, 
-			 Rsv1:1, %% Rsv1 = 0
-			 Rsv2:1, %% Rsv2 = 0
-			 Rsv3:1, %% Rsv3 = 0
-			 Opcode:4,
-			 MaskBit:1, %% must be 1
-			 126:7,
-			 PayloadLen:16,
-			 MaskKey:4/binary,
-			 PayloadData:PayloadLen/binary-unit:8,
-			 Rest/binary>>) ->
+take_frame(<<Fin:1,
+             Rsv1:1, %% Rsv1 = 0
+             Rsv2:1, %% Rsv2 = 0
+             Rsv3:1, %% Rsv3 = 0
+             Opcode:4,
+             MaskBit:1, %% must be 1
+             126:7,
+             PayloadLen:16,
+             MaskKey:4/binary,
+             PayloadData:PayloadLen/binary-unit:8,
+             Rest/binary>>) ->
     ?DEBUG("tk2", []),
-	{#frame{fin=Fin, 
-			rsv1=Rsv1,
-			rsv2=Rsv2,
-			rsv3=Rsv3,
-			opcode=Opcode,
-			maskbit=MaskBit,
-			length=PayloadLen,
-			maskkey=MaskKey,
-			data=unmask(MaskKey,PayloadData)},	Rest};
+    {#frame{fin=Fin,
+            rsv1=Rsv1,
+            rsv2=Rsv2,
+            rsv3=Rsv3,
+            opcode=Opcode,
+            maskbit=MaskBit,
+            length=PayloadLen,
+            maskkey=MaskKey,
+            data=unmask(MaskKey,PayloadData)},    Rest};
 % extended payload (127)
-take_frame(<<Fin:1, 
-			 Rsv1:1, %% Rsv1 = 0
-			 Rsv2:1, %% Rsv2 = 0
-			 Rsv3:1, %% Rsv3 = 0
-			 Opcode:4,
-			 MaskBit:1, %% must be 1
-			 127:7, %% "If 127, the following 8 bytes interpreted as a 64-bit unsigned integer (the most significant bit MUST be 0)" 
-			 0:1,	%% MSB of 0
-			 PayloadLen:63,
-			 MaskKey:4/binary,
-			 PayloadData:PayloadLen/binary-unit:8,
-			 Rest/binary>>) ->
+take_frame(<<Fin:1,
+             Rsv1:1, %% Rsv1 = 0
+             Rsv2:1, %% Rsv2 = 0
+             Rsv3:1, %% Rsv3 = 0
+             Opcode:4,
+             MaskBit:1, %% must be 1
+             127:7, %% "If 127, the following 8 bytes interpreted as a 64-bit unsigned integer (the most significant bit MUST be 0)"
+             0:1,    %% MSB of 0
+             PayloadLen:63,
+             MaskKey:4/binary,
+             PayloadData:PayloadLen/binary-unit:8,
+             Rest/binary>>) ->
     ?DEBUG("tk3", []),
-	{#frame{fin=Fin, 
-			rsv1=Rsv1,
-			rsv2=Rsv2,
-			rsv3=Rsv3,
-			opcode=Opcode,
-			maskbit=MaskBit,
-			length=PayloadLen,
-			maskkey=MaskKey,
-			data=unmask(MaskKey, PayloadData)},	 Rest};
-			
+    {#frame{fin=Fin,
+            rsv1=Rsv1,
+            rsv2=Rsv2,
+            rsv3=Rsv3,
+            opcode=Opcode,
+            maskbit=MaskBit,
+            length=PayloadLen,
+            maskkey=MaskKey,
+            data=unmask(MaskKey, PayloadData)},     Rest};
+
 % incomplete frame
 take_frame(Data) when is_binary(Data), size(Data) < ?MAX_UNPARSED_BUFFER_SIZE ->
     ?DEBUG("tk4", []),
-	{undefined, Data};
+    {undefined, Data};
 % Try to prevent denial-of-service from clients that send an infinite stream of
 % incompatible data
 take_frame(Data) when is_binary(Data), size(Data) >= ?MAX_UNPARSED_BUFFER_SIZE ->
     ?DEBUG("tk5", []),
-	{error, max_size_reached}.    
+    {error, max_size_reached}.
 
 
 % unmask
--spec unmask(Key::binary(), Data::binary()) -> binary(). 
+-spec unmask(Key::binary(), Data::binary()) -> binary().
 unmask(Key, <<_:512,_Rest/binary>> = Data) ->
-	K = binary:copy(Key, 512 div 32),
-	<<LongKey:512>> = K,
-	<<ShortKey:32>> = Key,
-	unmask(ShortKey, LongKey, Data, <<>>);
+    K = binary:copy(Key, 512 div 32),
+    <<LongKey:512>> = K,
+    <<ShortKey:32>> = Key,
+    unmask(ShortKey, LongKey, Data, <<>>);
 unmask(Key, Data) ->
-	<<ShortKey:32>> = Key,
-	unmask(ShortKey,none, Data, <<>>).
+    <<ShortKey:32>> = Key,
+    unmask(ShortKey,none, Data, <<>>).
 unmask(Key, LongKey, Data, Accu) ->
-	case Data of
-		<<A:512, Rest/binary>> ->
-			C = A bxor LongKey,
-			unmask(Key, LongKey, Rest, <<Accu/binary, C:512>>);
-		<<A:32,Rest/binary>> ->
-			C = A bxor Key,
-			unmask(Key, LongKey, Rest, <<Accu/binary, C:32>>);
-		<<A:24>> ->
-			<<B:24, _:8>> = <<Key:32>>,
-			C = A bxor B,
-			<<Accu/binary, C:24>>;
-		<<A:16>> ->
-			<<B:16, _:16>> = <<Key:32>>,
-			C = A bxor B,
-			<<Accu/binary, C:16>>;
-		<<A:8>> ->
-			<<B:8, _:24>> = <<Key:32>>,
-			C = A bxor B,
-			<<Accu/binary, C:8>>;
-		<<>> ->
-			Accu
-	end.
-    
+    case Data of
+        <<A:512, Rest/binary>> ->
+            C = A bxor LongKey,
+            unmask(Key, LongKey, Rest, <<Accu/binary, C:512>>);
+        <<A:32,Rest/binary>> ->
+            C = A bxor Key,
+            unmask(Key, LongKey, Rest, <<Accu/binary, C:32>>);
+        <<A:24>> ->
+            <<B:24, _:8>> = <<Key:32>>,
+            C = A bxor B,
+            <<Accu/binary, C:24>>;
+        <<A:16>> ->
+            <<B:16, _:16>> = <<Key:32>>,
+            C = A bxor B,
+            <<Accu/binary, C:16>>;
+        <<A:8>> ->
+            <<B:8, _:24>> = <<Key:32>>,
+            C = A bxor B,
+            <<Accu/binary, C:8>>;
+        <<>> ->
+            Accu
+    end.
+
 %% For now only build a legacy stream end packet
 build_stream_end() ->
     list_to_binary([0,<<"</stream:stream>">>,255]).

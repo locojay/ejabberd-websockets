@@ -29,7 +29,12 @@
 	 start/4,
 	 process_request/5]).
 
+
+-define(LAGER,1).
+
 -include("ejabberd.hrl").
+-include("logger.hrl").
+-include("xml.hrl").
 
 %% Module constants
 -define(NULL_PEER, {{0, 0, 0, 0}, 0}).
@@ -73,15 +78,16 @@
 }).
 
 start(Host, Sid, Key, IP) ->
-	?DEBUG("Starting ejabberd_xmpp_websocket", []),
-	?DEBUG("Host: ~p; Sid: ~p; Key: ~p, IP: ~p", [Host, Sid, Key, IP]),
+    ?DEBUG("Starting ejabberd_xmpp_websocket", []),
+    ?DEBUG("Host: ~p; Sid: ~p; Key: ~p, IP: ~p", [Host, Sid, Key, IP]),
     Proc = gen_mod:get_module_proc(Host, ejabberd_mod_websocket),
     case catch supervisor:start_child(Proc, [Sid, Key, IP]) of
-    	{ok, Pid} -> {ok, Pid};
-	Reason ->
+        {ok, Pid} -> {ok, Pid};
+        Reason ->
             ?ERROR_MSG("~p~n",[Reason]),
             {error, "Cannot start XMPP, Websocket session"}
     end.
+
 start_link(Sid, Key, IP) ->
 	?DEBUG("Starting ejabberd_mod_websocket", []),
     gen_fsm:start_link(?MODULE, [Sid, Key, IP], []).
@@ -133,6 +139,7 @@ peername({xmpp_websocket, _FsmRef, IP}) ->
 
 %% entry point for websocket data
 process_request(WSockMod, WSock, FsmRef, Data, IP) ->
+    ?DEBUG("FsmRef is ~p", [FsmRef]),
     Opts1 = ejabberd_c2s_config:get_c2s_limits(),
     Opts = [{xml_socket, true} | Opts1],
     MaxStanzaSize = case lists:keysearch(max_stanza_size, 1, Opts) of
@@ -144,7 +151,9 @@ process_request(WSockMod, WSock, FsmRef, Data, IP) ->
     case validate_request(Data, PayloadSize, MaxStanzaSize) of
         {ok, ParsedPayload} ->
             ?DEBUG("Parsed Payload: ~p", [ParsedPayload]),
-            case stream_start(ParsedPayload) of
+            SStart = stream_start(ParsedPayload),
+            ?DEBUG("*******************~p", [SStart]),
+            case SStart of
                 {Host, Sid, Key} when (FsmRef =:= false) or
                                       (FsmRef =:= undefined) ->
                     case start(Host, Sid, Key, IP) of
@@ -154,7 +163,8 @@ process_request(WSockMod, WSock, FsmRef, Data, IP) ->
                               Pid,
                               #wsr{sockmod=WSockMod,
                                    socket=WSock,
-                                   out=[ParsedPayload]}),
+                                   out=[{xmlstreamstart, "stream:stream", ParsedPayload#xmlel.attrs}]}),
+                            ?DEBUG("session started", []),
                             {<<"session started">>, <<>>, Pid};
                         S ->
                             ?ERROR_MSG("Error starting session:~p~n", [S])
@@ -165,7 +175,7 @@ process_request(WSockMod, WSock, FsmRef, Data, IP) ->
                            [FsmRef]),
                     send_data(FsmRef, #wsr{sockmod=WSockMod,
                                            socket=WSock,
-                                           out=[ParsedPayload]}),
+                                           out=[{xmlelement, "stream:stream", ParsedPayload#xmlel.attrs}]}),
                     {Data, <<>>, FsmRef};
                 false ->
                     ?DEBUG("stream start: false", []),
@@ -290,6 +300,8 @@ handle_sync_event({send_xml, Packet}, _From, StateName, StateData) ->
 %% Handle writing to c2s
 handle_sync_event(#wsr{out=Payload, socket=WSocket, sockmod=WSockmod},
                   From, StateName, StateData) ->
+    ?DEBUG("in handle sync event", []),
+    ?DEBUG("Payload ~p", [Payload]),
     Reply = ok,
     case StateData#state.waiting_input of
         false ->
@@ -310,7 +322,7 @@ handle_sync_event(#wsr{out=Payload, socket=WSocket, sockmod=WSockmod},
                       send_stream_start(C2SPid, Attrs);
                  (El) ->
                       gen_fsm:send_event(
-                        C2SPid, {xmlstreamelement, El})
+                        C2SPid, El)
               end, Payload),
             {reply, Reply, StateName,
              StateData#state{websocket_s=WSocket,
@@ -396,19 +408,20 @@ terminate(_Reason, _StateName, StateData) ->
 %% Internal functions
 %%%
 stream_start(ParsedPayload) ->
-    ?DEBUG("~p~n",[ParsedPayload]),
+    ?DEBUG("Stream start PasedPayload is ~p~n",[ParsedPayload]),
     case ParsedPayload of
-        {xmlelement, "stream:stream", Attrs, _} ->
-            {"to",Host} = lists:keyfind("to", 1, Attrs),
-            Sid = sha:sha(term_to_binary({now(), make_ref()})),
-            Key = "",
-            {Host, Sid, Key};
-        {xmlstreamstart, _Name, Attrs} ->
-            {"to",Host} = lists:keyfind("to", 1, Attrs),
-            Sid = sha:sha(term_to_binary({now(), make_ref()})),
+        #xmlel{name=Name,
+               attrs = Attrs,
+               children= Childs} ->
+            % {"to",Host} = lists:keyfind("to", 1, Attrs),
+            Host = xml:get_attr_s(<<"to">>, Attrs),
+            ?DEBUG("Host is ~p~n",[Host]),
+            Sid = p1_sha:sha(term_to_binary({now(), make_ref()})),
+            %%Sid = sha:sha(term_to_binary({now(), make_ref()})),
             Key = "",
             {Host, Sid, Key};
         _ ->
+            ?DEBUG("|||||||||||||||||||||||||||||||||||||||||||||||~n",[]),
             false
     end.
 %% validate request sent. ensure that its parsable XMPP
@@ -432,7 +445,7 @@ validate_request(Data, PayloadSize, MaxStanzaSize) ->
         ParsedData ->
             ?DEBUG("parsed: ~p", [ParsedData]),
             if PayloadSize =< MaxStanzaSize ->
-                    {ok, ParsedData};
+                    {ok,  ParsedData};
                true ->
                     {size_limit, {}}
             end
@@ -473,22 +486,28 @@ send_element(StateData, {xmlstreamstart, Name, Attrs}) ->
     send_text(StateData, XmlString);
 send_element(StateData, {xmlstreamend, "stream:stream"}) ->
     send_text(StateData, <<"</stream:stream>">>);
+send_element(StateData, {xmlstreamend, <<"stream:stream">>}) ->
+    send_text(StateData, <<"</stream:stream>">>);
 send_element(StateData, El) ->
     send_text(StateData, xml:element_to_binary(El)).
 
 send_stream_start(C2SPid, Attrs) ->
-    StreamTo = case lists:keyfind("to", 1, Attrs) of
-                   {"to", Ato} ->
-                       case lists:keyfind("version",
-                                          1, Attrs) of
-                           {"version", AVersion} ->
-                               {Ato, AVersion};
-                           _ ->
-                               {Ato, ""}
-                       end
-               end,
+    % StreamTo = case lists:keyfind("to", 1, Attrs) of
+    %                {"to", Ato} ->
+    %                    case lists:keyfind("version",
+    %                                       1, Attrs) of
+    %                        {"version", AVersion} ->
+    %                            {Ato, AVersion};
+    %                        _ ->
+    %                            {Ato, ""}
+    %                    end
+    %            end,
+    ToP = xml:get_attr_s(<<"to">>, Attrs),
+    VersionP = xml:get_attr_s(<<"version">>, Attrs),
+    StreamTo = {ToP, VersionP},
+    ?DEBUG("Streaming to ~p", [StreamTo]),
     case StreamTo of
-        {To, ""} ->
+        {To, false} ->
             gen_fsm:send_event(
               C2SPid,
               {xmlstreamstart, "stream:stream",
@@ -505,7 +524,9 @@ send_stream_start(C2SPid, Attrs) ->
                 {"xmlns:stream", ?NS_STREAM}]})
     end.
 send_data(FsmRef, Req) ->
+    ?DEBUG("SENDING DATA:", []),
     ?DEBUG("session pid:~p~n", [FsmRef]),
+    ?DEBUG("Req is :~p~n", [Req]),
     case FsmRef of
         false ->
             ?DEBUG("No session started.",[]);
